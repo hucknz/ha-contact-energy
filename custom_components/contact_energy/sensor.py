@@ -41,10 +41,6 @@ SCAN_INTERVAL = timedelta(hours=1)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     """Set up Contact Energy sensors from a config entry."""
-    email = entry.data[CONF_EMAIL]
-    password = entry.data[CONF_PASSWORD]
-    account_id = entry.data[CONF_ACCOUNT_ID]
-    contract_id = entry.data[CONF_CONTRACT_ID]
     icp = entry.data[CONF_CONTRACT_ICP]
 
     # Get the stored API instance and entry data

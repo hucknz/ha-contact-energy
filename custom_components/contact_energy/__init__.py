@@ -8,7 +8,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .api import ContactEnergyApi
-from .const import DOMAIN
+from .const import DOMAIN, CONF_ACCOUNT_ID, CONF_CONTRACT_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,8 +20,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     hass.data.setdefault(DOMAIN, {})
     
-    # Create API instance
-    api = ContactEnergyApi(hass, entry.data["email"], entry.data["password"])
+    # Create API instance with account and contract IDs
+    api = ContactEnergyApi(
+        hass,
+        entry.data["email"],
+        entry.data["password"],
+        entry.data.get(CONF_ACCOUNT_ID),
+        entry.data.get(CONF_CONTRACT_ID)
+    )
     
     try:
         if not await api.async_login():
