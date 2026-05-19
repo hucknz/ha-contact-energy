@@ -31,6 +31,10 @@ class ContactEnergyApi:
         self._account_request = None
         self._login_lock = asyncio.Lock()
         self._account_lock = asyncio.Lock()
+        
+        # Usage data caching: cache full-day responses to avoid re-fetching
+        self._usage_cache = {}  # {date_str: response_data}
+        self._usage_cache_duration = timedelta(hours=1)
 
     def _get_headers(self, include_token: bool = True) -> dict:
         """Get headers for API requests."""
@@ -152,7 +156,30 @@ class ContactEnergyApi:
                 raise
 
     async def get_usage(self, year: str, month: str, day: str) -> Optional[list]:
-        """Get usage data for a specific date."""
+        """Get usage data for a specific date with caching.
+        
+        Args:
+            year: Year as string
+            month: Month as string (no leading zero required)
+            day: Day as string (no leading zero required)
+            
+        Returns:
+            List of hourly usage data points, or None if not available
+        """
+        date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        now = datetime.now()
+
+        # Check cache first
+        if date_str in self._usage_cache:
+            cached_entry = self._usage_cache[date_str]
+            cache_age = now - cached_entry["timestamp"]
+            if cache_age < self._usage_cache_duration:
+                _LOGGER.debug("Using cached usage data for %s (age: %s)", date_str, cache_age)
+                return cached_entry["data"]
+            else:
+                # Cache expired, remove it
+                del self._usage_cache[date_str]
+
         if not self._api_token and not await self.async_login():
             _LOGGER.error("Failed to login when fetching usage data")
             return None
@@ -161,10 +188,9 @@ class ContactEnergyApi:
             _LOGGER.error("Missing contract ID or account ID")
             return None
 
-        date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
         url = f"{self._url_base}/usage/v2/{self._contractId}?ba={self._accountId}&interval=hourly&from={date_str}&to={date_str}"
         
-        _LOGGER.debug("Getting usage data for %s", date_str)
+        _LOGGER.debug("Fetching usage data for %s from API", date_str)
         
         try:
             data = await self._async_request(
@@ -172,8 +198,14 @@ class ContactEnergyApi:
                 url, 
                 headers=self._get_headers()
             )
+            
             if data:
-                _LOGGER.debug("Successfully fetched usage data for %s", date_str)
+                _LOGGER.debug("Successfully fetched %d hourly data points for %s", len(data), date_str)
+                # Cache the response
+                self._usage_cache[date_str] = {
+                    "data": data,
+                    "timestamp": now
+                }
                 return data
             
             _LOGGER.debug("No usage data available for %s", date_str)

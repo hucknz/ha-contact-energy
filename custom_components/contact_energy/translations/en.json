@@ -3,11 +3,12 @@
     "step": {
       "user": {
         "title": "Connect to Contact Energy",
-        "description": "Enter your Contact Energy account details.",
+        "description": "Enter your Contact Energy account details to set up the energy integration.",
         "data": {
           "email": "Email",
           "password": "Password",
-          "usage_days": "Fetch data for the past X days"
+          "initial_backfill_days": "Initial historical data (days) - fetched on first setup to populate historical energy data",
+          "daily_lookback_days": "Daily lookback window (days) - must be at least 3 to account for the API's 3-day data lag"
         }
       },
       "contract": {

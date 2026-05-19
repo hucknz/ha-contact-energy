@@ -30,8 +30,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
         _LOGGER.debug("Successfully logged in during setup")
         
-        # Store API instance for platforms to use
-        hass.data[DOMAIN][entry.entry_id] = api
+        # Store API instance and entry data for platforms to use
+        entry_data = {
+            "api": api,
+            "first_run_complete": False,
+        }
+        hass.data[DOMAIN][entry.entry_id] = entry_data
         
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
         

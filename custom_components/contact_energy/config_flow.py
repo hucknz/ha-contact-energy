@@ -15,6 +15,8 @@ from .api import ContactEnergyApi, CannotConnect, InvalidAuth, UnknownError
 from .const import (
     DOMAIN,
     CONF_USAGE_DAYS,
+    CONF_INITIAL_BACKFILL_DAYS,
+    CONF_DAILY_LOOKBACK_DAYS,
     CONF_ACCOUNT_ID,
     CONF_CONTRACT_ID,
     CONF_CONTRACT_ICP
@@ -26,7 +28,11 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_USAGE_DAYS, default=10): cv.positive_int,
+        vol.Optional(CONF_INITIAL_BACKFILL_DAYS, default=30): cv.positive_int,
+        vol.Optional(CONF_DAILY_LOOKBACK_DAYS, default=4): vol.All(
+            cv.positive_int,
+            vol.Range(min=3),  # Must be at least 3 to account for 3-day API lag
+        ),
     }
 )
 

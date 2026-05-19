@@ -9,7 +9,7 @@ from homeassistant.components.sensor import (
 )
 from custom_components.contact_energy.sensors import (
     ContactEnergyAccountSensor,
-    ContactEnergyUsageSensor
+    ContactEnergyEnergySensor
 )
 from custom_components.contact_energy.api import ContactEnergyApi
 
@@ -21,22 +21,22 @@ from homeassistant.const import (
 )
 
 from custom_components.contact_energy.const import (
-    CONF_USAGE_DAYS, 
     CONF_ACCOUNT_ID, 
     CONF_CONTRACT_ID, 
     CONF_CONTRACT_ICP,
-    SENSOR_USAGE_NAME,
+    SENSOR_ENERGY_NAME,
     SENSOR_ACCOUNT_BALANCE_NAME,
     SENSOR_NEXT_BILL_AMOUNT_NAME,
     SENSOR_NEXT_BILL_DATE_NAME,
     SENSOR_PAYMENT_DUE_NAME,
     SENSOR_PAYMENT_DUE_DATE_NAME,
     SENSOR_PREVIOUS_READING_DATE_NAME,
-    SENSOR_NEXT_READING_DATE_NAME
+    SENSOR_NEXT_READING_DATE_NAME,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
-SCAN_INTERVAL = timedelta(hours=8)
+SCAN_INTERVAL = timedelta(hours=1)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -45,27 +45,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     password = entry.data[CONF_PASSWORD]
     account_id = entry.data[CONF_ACCOUNT_ID]
     contract_id = entry.data[CONF_CONTRACT_ID]
-    usage_days = entry.data.get(CONF_USAGE_DAYS, 10)
     icp = entry.data[CONF_CONTRACT_ICP]
 
-    api = ContactEnergyApi(hass, email, password, account_id, contract_id)
-    
-    # Initialize API connection
-    if not await api.async_login():
-        _LOGGER.error("Failed to connect to Contact Energy API")
-        return False
+    # Get the stored API instance and entry data
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    api = entry_data["api"]
 
     sensors = [
-        ContactEnergyUsageSensor(
-            hass, 
-            SENSOR_USAGE_NAME, 
-            api, 
-            icp, 
-            UnitOfEnergy.KILO_WATT_HOUR,
-            "mdi:meter-electric",
-            SensorStateClass.TOTAL,
-            SensorDeviceClass.ENERGY,
-            usage_days
+        ContactEnergyEnergySensor(
+            hass,
+            SENSOR_ENERGY_NAME,
+            api,
+            icp,
+            entry,
         ),
         ContactEnergyAccountSensor(
             hass,
@@ -158,4 +150,3 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         ),
     ]
     async_add_entities(sensors, True)
-    return True
