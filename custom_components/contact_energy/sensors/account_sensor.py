@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Callable, Optional, Dict, Any
 
 from custom_components.contact_energy.sensors.base_sensor import BaseSensor
-from custom_components.contact_energy.api import InvalidAuth
+from custom_components.contact_energy.api import InvalidAuth, UnknownError, CannotConnect
 from homeassistant.components.sensor import SensorDeviceClass
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,10 +36,16 @@ class ContactEnergyAccountSensor(BaseSensor):
             account_data = await self._fetch_account_data()
             self._state = self._value_fn(account_data)
             self._update_attributes(account_data)
+            self._update_failures = 0
         except InvalidAuth:
             _LOGGER.warning("Authentication error updating %s, will retry on next update", self._name)
+            self._update_failures += 1
+        except (UnknownError, CannotConnect) as error:
+            _LOGGER.warning("API error updating account sensor %s: %s", self._name, error)
+            self._update_failures += 1
         except Exception as error:
             _LOGGER.error("Unexpected error updating account sensor %s: %s", self._name, error)
+            self._update_failures += 1
 
     async def _fetch_account_data(self) -> Dict[str, Any]:
         """Fetch account details from API."""

@@ -107,23 +107,24 @@ class ContactEnergyApi:
         # Check if cache is valid
         if (self._account_cache and self._account_cache_timestamp and 
             (now - self._account_cache_timestamp) < self._account_cache_duration):
+            _LOGGER.debug("Using cached account data")
             return self._account_cache
 
         async with self._account_lock:
             # After acquiring lock, check cache again
             if (self._account_cache and self._account_cache_timestamp and 
                 (now - self._account_cache_timestamp) < self._account_cache_duration):
-                _LOGGER.warning("Using account data from cache")
-
+                _LOGGER.debug("Using account data from cache")
                 return self._account_cache
 
             # Check if we need to login
             if not self._api_token:
+                _LOGGER.debug("No API token, attempting login")
                 if not await self.async_login():
                     raise InvalidAuth("Failed to login")
 
             try:
-                _LOGGER.warning("Fetching fresh account data")
+                _LOGGER.debug("Fetching fresh account data")
                 data = await self._async_request(
                     "GET",
                     f"{self._url_base}/accounts/v2",
@@ -133,8 +134,10 @@ class ContactEnergyApi:
                 if data:
                     self._account_cache = data
                     self._account_cache_timestamp = now
+                    _LOGGER.debug("Successfully fetched and cached account data")
                     return data
 
+                _LOGGER.error("No account data received from API")
                 raise UnknownError("No data received from API")
 
             except InvalidAuth:
