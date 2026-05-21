@@ -23,7 +23,14 @@ API_DATA_LAG_DAYS = 3
 
 
 class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
-    """Contact Energy Primary Energy Sensor for Home Assistant Energy Integration."""
+    """Contact Energy Primary Energy Sensor for Home Assistant Energy Integration.
+    
+    This sensor creates statistics entries with historical timestamps for use with
+    the Home Assistant Energy dashboard. The sensor state shows the cumulative kWh
+    for monitoring purposes, but the Energy dashboard should be configured to read
+    from the statistics (not this sensor) to properly display historical data on
+    the correct dates.
+    """
 
     def __init__(
         self,
@@ -41,7 +48,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             icp,
             UnitOfEnergy.KILO_WATT_HOUR,
             "mdi:lightning-bolt",
-            state_class=SensorStateClass.TOTAL_INCREASING,
+            state_class=SensorStateClass.MEASUREMENT,  # Changed from TOTAL_INCREASING to avoid state-based Energy dashboard reading
             device_class=SensorDeviceClass.ENERGY,
         )
 
@@ -307,7 +314,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                     has_sum=True,
                     name=f"Contact Energy - Electricity ({icp})",
                     source=DOMAIN,
-                    statistic_id=f"{DOMAIN}:energy_consumption_{icp}",
+                    statistic_id=f"{DOMAIN}:energy_consumption",
                     unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                 )
                 async_add_external_statistics(self.hass, metadata, statistics_data)
