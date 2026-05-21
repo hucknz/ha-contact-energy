@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.const import UnitOfEnergy
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -11,6 +13,7 @@ from custom_components.contact_energy.sensors.base_sensor import BaseSensor
 from custom_components.contact_energy.const import (
     CONF_INITIAL_BACKFILL_DAYS,
     CONF_DAILY_LOOKBACK_DAYS,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -239,12 +242,14 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
 
         De-duplicates against previously fetched hours to prevent double-counting.
         Only processes paid energy (offpeakValue == "0.00").
+        Creates statistics entries with proper historical timestamps.
         """
         if not response:
             return
 
         hourly_kwh = 0.0
         added_hours = 0
+        statistics_data = []
 
         for point in response:
             if not point.get("value"):
@@ -274,6 +279,15 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 self._cumulative_kwh += kwh_value
                 self._fetched_hours.add(hour_key)
                 added_hours += 1
+                
+                # Create a statistics entry with the ACTUAL timestamp from the API
+                statistics_data.append(
+                    StatisticData(
+                        start=timestamp,
+                        sum=self._cumulative_kwh,
+                    )
+                )
+                
                 _LOGGER.debug(
                     "Added hour %s: %.3f kWh (cumulative: %.3f)",
                     hour_key,
@@ -282,6 +296,24 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 )
 
         self._last_hour_usage = hourly_kwh
+
+        # Create statistics with proper historical timestamps
+        if statistics_data:
+            _LOGGER.debug("Creating %d statistics entries with historical timestamps", len(statistics_data))
+            try:
+                icp = self._icp
+                metadata = StatisticMetaData(
+                    has_mean=False,
+                    has_sum=True,
+                    name=f"Contact Energy - Electricity ({icp})",
+                    source=DOMAIN,
+                    statistic_id=f"{DOMAIN}:energy_consumption_{icp}",
+                    unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                )
+                async_add_external_statistics(self.hass, metadata, statistics_data)
+                _LOGGER.debug("Statistics entries created successfully")
+            except Exception as error:
+                _LOGGER.error("Failed to create statistics entries: %s", error)
 
         if added_hours > 0:
             _LOGGER.debug("Processed %d new hours", added_hours)
