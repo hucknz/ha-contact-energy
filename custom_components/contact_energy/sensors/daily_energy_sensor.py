@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
+from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.const import UnitOfEnergy
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -11,6 +13,7 @@ from custom_components.contact_energy.sensors.base_sensor import BaseSensor
 from custom_components.contact_energy.const import (
     CONF_INITIAL_BACKFILL_DAYS,
     CONF_DAILY_LOOKBACK_DAYS,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -233,6 +236,10 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
     async def _async_process_daily_total(self, response: list, date: datetime) -> None:
         """Calculate and store daily total from hourly data.
         
+        Creates both:
+        - Sensor state update (only for current day)
+        - Statistics entry (for all days, used by Energy dashboard)
+        
         Args:
             response: List of hourly data points
             date: The date for which we're calculating the daily total
@@ -261,7 +268,44 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                 hourly_count,
             )
             
-            # If this is the current day, update the state
+            # If this is the current day, update the sensor state
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             if date == today:
                 self._daily_kwh = daily_total
+            
+            # Create statistics entry for all days (both past and current)
+            # This allows the Energy dashboard to show historical daily totals
+            # with proper timestamps even though sensor state only shows today
+            try:
+                icp = self._icp
+                # Use midnight of the target date as the statistic start time
+                stat_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                statistics_data = [
+                    StatisticData(
+                        start=stat_start,
+                        sum=daily_total,
+                    )
+                ]
+                
+                metadata = StatisticMetaData(
+                    has_mean=False,
+                    has_sum=True,
+                    name=f"Contact Energy - Daily Electricity ({icp})",
+                    source=DOMAIN,
+                    statistic_id=f"{DOMAIN}:daily_energy_consumption",
+                    unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                )
+                
+                async_add_external_statistics(self.hass, metadata, statistics_data)
+                _LOGGER.debug(
+                    "Created statistics entry for daily energy on %s: %.3f kWh",
+                    date.strftime("%Y-%m-%d"),
+                    daily_total,
+                )
+            except Exception as error:
+                _LOGGER.error(
+                    "Failed to create statistics for daily energy on %s: %s",
+                    date.strftime("%Y-%m-%d"),
+                    str(error),
+                )
