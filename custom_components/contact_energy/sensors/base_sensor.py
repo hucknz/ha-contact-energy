@@ -6,11 +6,10 @@ from homeassistant.util import slugify
 from homeassistant.components.sensor import SensorEntity
 from custom_components.contact_energy.const import (
     DOMAIN,
-    DOMAIN_NAME
+    DOMAIN_NAME,
+    SCAN_INTERVAL,
+    FORCED_SCAN_INTERVAL,
 )
-
-SCAN_INTERVAL = timedelta(hours=8)
-FORCED_SCAN_INTERVAL = timedelta(hours=24)
 ENTITY_ID_FORMAT = DOMAIN + ".{}"
 
 class BaseSensor(SensorEntity):

@@ -48,7 +48,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             icp,
             UnitOfEnergy.KILO_WATT_HOUR,
             "mdi:lightning-bolt",
-            state_class=SensorStateClass.MEASUREMENT,  # Changed from TOTAL_INCREASING to avoid state-based Energy dashboard reading
+            state_class=SensorStateClass.TOTAL_INCREASING,
             device_class=SensorDeviceClass.ENERGY,
         )
 

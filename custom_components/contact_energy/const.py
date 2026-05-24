@@ -1,11 +1,17 @@
 """Constants for the Contact Energy sensors."""
 
+from datetime import timedelta
 from typing import Final, final
 
 DOMAIN = "contact_energy"
 DOMAIN_NAME = "Contact Energy"
 
-SENSOR_ENERGY_NAME = "Energy"
+# Global polling interval for all sensors
+SCAN_INTERVAL = timedelta(hours=1)
+FORCED_SCAN_INTERVAL = timedelta(hours=24)
+
+SENSOR_ENERGY_NAME = "Total Energy"
+SENSOR_DAILY_ENERGY_NAME = "Daily Energy"
 SENSOR_USAGE_NAME = "Usage"
 SENSOR_SOLD_NAME = "Sold"
 SENSOR_PRICES_NAME = "Prices"

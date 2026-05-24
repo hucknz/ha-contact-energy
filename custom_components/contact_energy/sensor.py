@@ -9,7 +9,8 @@ from homeassistant.components.sensor import (
 )
 from custom_components.contact_energy.sensors import (
     ContactEnergyAccountSensor,
-    ContactEnergyEnergySensor
+    ContactEnergyEnergySensor,
+    ContactEnergyDailyEnergySensor
 )
 from custom_components.contact_energy.api import ContactEnergyApi
 
@@ -25,6 +26,7 @@ from custom_components.contact_energy.const import (
     CONF_CONTRACT_ID, 
     CONF_CONTRACT_ICP,
     SENSOR_ENERGY_NAME,
+    SENSOR_DAILY_ENERGY_NAME,
     SENSOR_ACCOUNT_BALANCE_NAME,
     SENSOR_NEXT_BILL_AMOUNT_NAME,
     SENSOR_NEXT_BILL_DATE_NAME,
@@ -33,6 +35,7 @@ from custom_components.contact_energy.const import (
     SENSOR_PREVIOUS_READING_DATE_NAME,
     SENSOR_NEXT_READING_DATE_NAME,
     DOMAIN,
+    SCAN_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +54,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         ContactEnergyEnergySensor(
             hass,
             SENSOR_ENERGY_NAME,
+            api,
+            icp,
+            entry,
+        ),
+        ContactEnergyDailyEnergySensor(
+            hass,
+            SENSOR_DAILY_ENERGY_NAME,
             api,
             icp,
             entry,
