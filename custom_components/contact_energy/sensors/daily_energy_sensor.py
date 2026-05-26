@@ -190,6 +190,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                 str(current_date.year),
                 str(current_date.month),
                 str(current_date.day),
+                interval="hourly"
             )
 
             if not response:
@@ -213,25 +214,53 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         _LOGGER.info("Backfill complete. Current daily kWh: %.3f", self._daily_kwh)
 
     async def _async_perform_incremental_update(self, now: datetime) -> None:
-        """Perform incremental update for the most recent day."""
+        """Perform incremental update for recent days (catch-up for days after backfill).
+        
+        Fetches the last `lookback_days` of data that are available (accounting for API lag).
+        This ensures we catch daily data as it becomes available without waiting for the next backfill.
+        """
         lookback_days = self._config_entry.data.get("daily_lookback_days", 4)
-        _LOGGER.debug("Performing incremental daily update")
+        _LOGGER.debug("Performing incremental daily update (lookback: %d days)", lookback_days)
 
-        # Fetch the most recent day with available data (today - 3 days)
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        fetch_date = today - timedelta(days=API_DATA_LAG_DAYS)
-
-        response = await self._api.get_usage(
-            str(fetch_date.year),
-            str(fetch_date.month),
-            str(fetch_date.day),
+        
+        # Fetch data from lookback window up to the most recent available day
+        # Most recent available = today - lag_days (data from 3 days ago)
+        end_date = today - timedelta(days=API_DATA_LAG_DAYS)
+        start_date = end_date - timedelta(days=lookback_days)
+        
+        _LOGGER.debug(
+            "Incremental update range: %s to %s (with %d-day lag)",
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
+            API_DATA_LAG_DAYS,
         )
 
-        if response:
-            await self._async_process_daily_total(response, fetch_date)
-            _LOGGER.debug("Incremental daily update complete. Current daily kWh: %.3f", self._daily_kwh)
-        else:
-            _LOGGER.debug("No data available for incremental daily update")
+        current_date = start_date
+        updates_attempted = 0
+        updates_succeeded = 0
+        
+        while current_date <= end_date:
+            updates_attempted += 1
+            response = await self._api.get_usage(
+                str(current_date.year),
+                str(current_date.month),
+                str(current_date.day),
+                interval="hourly"
+            )
+
+            if response:
+                await self._async_process_daily_total(response, current_date)
+                updates_succeeded += 1
+            
+            current_date += timedelta(days=1)
+        
+        _LOGGER.debug(
+            "Incremental daily update complete. %d/%d days updated. Current daily kWh: %.3f",
+            updates_succeeded,
+            updates_attempted,
+            self._daily_kwh,
+        )
 
     async def _async_process_daily_total(self, response: list, date: datetime) -> None:
         """Calculate and store daily total from hourly data.

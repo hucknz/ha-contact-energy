@@ -1,4 +1,4 @@
-"""Contact Energy Daily Gas Sensor."""
+"""Contact Energy Daily Cost Sensor."""
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -6,7 +6,7 @@ from typing import Optional
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_add_external_statistics
-from homeassistant.const import UnitOfVolume
+from homeassistant.const import CURRENCY_DOLLAR
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from custom_components.contact_energy.sensors.base_sensor import BaseSensor
@@ -22,11 +22,11 @@ _LOGGER = logging.getLogger(__name__)
 API_DATA_LAG_DAYS = 3
 
 
-class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
-    """Contact Energy Daily Gas Sensor.
+class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
+    """Contact Energy Daily Cost Sensor.
     
-    Shows gas consumed for the current day (or most recent day with data).
-    Resets to 0 at midnight. Daily totals are backfilled once per day.
+    Shows cost of electricity consumed for the current day.
+    Resets to 0 at midnight. Daily costs are backfilled once per day.
     """
 
     def __init__(
@@ -43,14 +43,14 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
             name,
             api,
             icp,
-            UnitOfVolume.CUBIC_METERS,
-            "mdi:fire",
+            CURRENCY_DOLLAR,
+            "mdi:currency-usd",
             state_class=SensorStateClass.TOTAL,
-            device_class=SensorDeviceClass.GAS,
+            device_class=SensorDeviceClass.MONETARY,
         )
 
         self._config_entry = config_entry
-        self._daily_m3 = 0.0
+        self._daily_nzd = 0.0
         self._current_date = None
         self._first_run_complete = False
         self._force_initial_backfill = True
@@ -59,8 +59,8 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
     @property
     def state(self) -> Optional[str]:
         """Return the state."""
-        if self._daily_m3 is not None:
-            return round(self._daily_m3, 3)
+        if self._daily_nzd is not None:
+            return round(self._daily_nzd, 3)
         return None
 
     @property
@@ -89,16 +89,16 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         # Try to restore state from previous session
         if state := await self.async_get_last_state():
             try:
-                self._daily_m3 = float(state.state)
+                self._daily_nzd = float(state.state)
                 _LOGGER.debug(
-                    "Restored daily m³ from previous session: %.3f m³",
-                    self._daily_m3,
+                    "Restored daily NZD from previous session: NZD%.3f",
+                    self._daily_nzd,
                 )
             except (ValueError, TypeError):
                 _LOGGER.debug(
                     "Could not restore state from previous session, starting fresh"
                 )
-                self._daily_m3 = 0.0
+                self._daily_nzd = 0.0
 
         # Set current date
         self._current_date = datetime.now().replace(
@@ -113,10 +113,10 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if self._current_date and self._current_date < today:
             _LOGGER.info(
-                "Day changed, resetting daily gas from %.3f m³ to 0.0 m³",
-                self._daily_m3,
+                "Day changed, resetting daily cost from NZD%.3f to NZD0.0",
+                self._daily_nzd,
             )
-            self._daily_m3 = 0.0
+            self._daily_nzd = 0.0
             self._current_date = today
 
         # Determine if we should update today
@@ -125,13 +125,13 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
             time_since_update = now - self._last_daily_update
             if time_since_update < timedelta(hours=23):
                 _LOGGER.debug(
-                    "Skipping daily gas update (last update %.1f hours ago)",
+                    "Skipping daily cost update (last update %.1f hours ago)",
                     time_since_update.total_seconds() / 3600,
                 )
                 return
 
         try:
-            _LOGGER.debug("Beginning daily gas update")
+            _LOGGER.debug("Beginning daily cost update")
 
             # Check if API token is valid
             if not self._api._api_token:
@@ -156,7 +156,7 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         except Exception as error:
             self._update_failures += 1
             _LOGGER.error(
-                "Error updating daily gas sensor (attempt %d): %s",
+                "Error updating daily cost sensor (attempt %d): %s",
                 self._update_failures,
                 str(error),
             )
@@ -167,13 +167,12 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
                 await self._api.async_login()
 
     async def _async_perform_backfill(self, now: datetime) -> None:
-        """Perform initial backfill of daily gas totals."""
+        """Perform initial backfill of daily costs."""
         backfill_days = self._config_entry.data.get(
             "initial_backfill_days", 30
         )
-        _LOGGER.info("Starting initial backfill of %d days for daily gas", backfill_days)
+        _LOGGER.info("Starting initial backfill of %d days for daily cost", backfill_days)
 
-        # Calculate date range
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = today - timedelta(
             days=backfill_days + API_DATA_LAG_DAYS
@@ -184,34 +183,33 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         consecutive_empty_days = 0
 
         while current_date <= end_date:
-            _LOGGER.debug("Backfilling daily gas total for %s", current_date.strftime("%Y-%m-%d"))
+            _LOGGER.debug("Backfilling daily cost for %s", current_date.strftime("%Y-%m-%d"))
 
             response = await self._api.get_usage(
                 str(current_date.year),
                 str(current_date.month),
                 str(current_date.day),
-                interval="monthly"
+                interval="hourly"
             )
 
             if not response:
                 consecutive_empty_days += 1
                 _LOGGER.debug(
-                    "No daily gas data for %s (empty count: %d)",
+                    "No daily cost data for %s (empty count: %d)",
                     current_date.strftime("%Y-%m-%d"),
                     consecutive_empty_days,
                 )
 
-                # Stop early if we've hit 2 consecutive empty days
                 if consecutive_empty_days >= 2:
-                    _LOGGER.debug("Found 2 consecutive empty days, stopping daily gas backfill")
+                    _LOGGER.debug("Found 2 consecutive empty days, stopping daily cost backfill")
                     break
             else:
                 consecutive_empty_days = 0
-                await self._async_process_daily_total(response, current_date)
+                await self._async_process_daily_cost(response, current_date)
 
             current_date += timedelta(days=1)
 
-        _LOGGER.info("Daily gas backfill complete. Current daily m³: %.3f", self._daily_m3)
+        _LOGGER.info("Daily cost backfill complete. Current daily NZD: %.3f", self._daily_nzd)
 
     async def _async_perform_incremental_update(self, now: datetime) -> None:
         """Perform incremental update for recent days (catch-up for days after backfill).
@@ -220,7 +218,7 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         This ensures we catch daily data as it becomes available without waiting for the next backfill.
         """
         lookback_days = self._config_entry.data.get("daily_lookback_days", 4)
-        _LOGGER.debug("Performing incremental daily gas update (lookback: %d days)", lookback_days)
+        _LOGGER.debug("Performing incremental daily cost update (lookback: %d days)", lookback_days)
 
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         
@@ -230,7 +228,7 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         start_date = end_date - timedelta(days=lookback_days)
         
         _LOGGER.debug(
-            "Incremental gas update range: %s to %s (with %d-day lag)",
+            "Incremental cost update range: %s to %s (with %d-day lag)",
             start_date.strftime("%Y-%m-%d"),
             end_date.strftime("%Y-%m-%d"),
             API_DATA_LAG_DAYS,
@@ -246,32 +244,32 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
                 str(current_date.year),
                 str(current_date.month),
                 str(current_date.day),
-                interval="monthly"
+                interval="hourly"
             )
 
             if response:
-                await self._async_process_daily_total(response, current_date)
+                await self._async_process_daily_cost(response, current_date)
                 updates_succeeded += 1
             
             current_date += timedelta(days=1)
         
         _LOGGER.debug(
-            "Incremental daily gas update complete. %d/%d days updated. Current daily m³: %.3f",
+            "Incremental daily cost update complete. %d/%d days updated. Current daily NZD: %.3f",
             updates_succeeded,
             updates_attempted,
-            self._daily_m3,
+            self._daily_nzd,
         )
 
-    async def _async_process_daily_total(self, response: list, date: datetime) -> None:
-        """Calculate and store daily gas total from daily data.
+    async def _async_process_daily_cost(self, response: list, date: datetime) -> None:
+        """Calculate and store daily cost from hourly data.
         
         Creates both:
         - Sensor state update (only for current day)
-        - Statistics entry (for all days, used by Energy dashboard)
+        - Statistics entry (for all days, used for cost tracking)
         
         Args:
-            response: List of daily data points
-            date: The date for which we're calculating the daily total
+            response: List of hourly data points
+            date: The date for which we're calculating the daily cost
         """
         if not response:
             return
@@ -279,14 +277,16 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         daily_total = 0.0
 
         for point in response:
-            if not point.get("value"):
+            if not point.get("dollarValue"):
                 continue
 
-            daily_total += float(point["value"])
+            # Only count paid energy cost (offpeakValue == "0.00" means no off-peak discount)
+            if point.get("offpeakValue", "0.00") == "0.00":
+                daily_total += float(point["dollarValue"])
 
         if daily_total > 0:
             _LOGGER.debug(
-                "Daily gas total for %s: %.3f m³",
+                "Daily cost for %s: NZD%.3f",
                 date.strftime("%Y-%m-%d"),
                 daily_total,
             )
@@ -294,12 +294,11 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
             # If this is the current day, update the sensor state
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             if date == today:
-                self._daily_m3 = daily_total
+                self._daily_nzd = daily_total
             
             # Create statistics entry for all days (both past and current)
             try:
                 icp = self._icp
-                # Use midnight of the target date as the statistic start time
                 stat_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
                 
                 statistics_data = [
@@ -312,21 +311,21 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
-                    name=f"Contact Energy - Daily Gas ({icp})",
+                    name=f"Contact Energy - Daily Electricity Cost ({icp})",
                     source=DOMAIN,
-                    statistic_id=f"{DOMAIN}:daily_gas_consumption",
-                    unit_of_measurement=UnitOfVolume.CUBIC_METERS,
+                    statistic_id=f"{DOMAIN}:daily_energy_cost",
+                    unit_of_measurement=CURRENCY_DOLLAR,
                 )
                 
                 async_add_external_statistics(self.hass, metadata, statistics_data)
                 _LOGGER.debug(
-                    "Created statistics entry for daily gas on %s: %.3f m³",
+                    "Created statistics entry for daily cost on %s: NZD%.3f",
                     date.strftime("%Y-%m-%d"),
                     daily_total,
                 )
             except Exception as error:
                 _LOGGER.error(
-                    "Failed to create statistics for daily gas on %s: %s",
+                    "Failed to create statistics for daily cost on %s: %s",
                     date.strftime("%Y-%m-%d"),
                     str(error),
                 )

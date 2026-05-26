@@ -175,6 +175,7 @@ class ContactEnergyGasSensor(BaseSensor, RestoreEntity):
                 str(current_date.year),
                 str(current_date.month),
                 str(current_date.day),
+                interval="monthly"
             )
 
             if not response:
@@ -218,6 +219,7 @@ class ContactEnergyGasSensor(BaseSensor, RestoreEntity):
                 str(current_date.year),
                 str(current_date.month),
                 str(current_date.day),
+                interval="monthly"
             )
 
             if not response:

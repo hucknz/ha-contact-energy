@@ -13,6 +13,8 @@ FORCED_SCAN_INTERVAL = timedelta(hours=24)
 # Electricity sensor names
 SENSOR_ENERGY_NAME = "Total Energy"
 SENSOR_DAILY_ENERGY_NAME = "Daily Energy"
+SENSOR_COST_NAME = "Total Cost"
+SENSOR_DAILY_COST_NAME = "Daily Cost"
 
 # Gas sensor names
 SENSOR_GAS_NAME = "Total Gas"

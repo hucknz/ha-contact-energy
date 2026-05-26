@@ -1,4 +1,4 @@
-"""Contact Energy Primary Energy Sensor for HA Energy Integration."""
+"""Contact Energy Cost Sensor for tracking electricity costs."""
 import logging
 from datetime import datetime, timedelta
 from typing import Optional
@@ -6,7 +6,7 @@ from typing import Optional
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_add_external_statistics
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import CURRENCY_DOLLAR
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from custom_components.contact_energy.sensors.base_sensor import BaseSensor
@@ -22,14 +22,13 @@ _LOGGER = logging.getLogger(__name__)
 API_DATA_LAG_DAYS = 3
 
 
-class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
-    """Contact Energy Primary Energy Sensor for Home Assistant Energy Integration.
+class ContactEnergyCostSensor(BaseSensor, RestoreEntity):
+    """Contact Energy Cost Sensor for tracking cumulative electricity costs.
     
     This sensor creates statistics entries with historical timestamps for use with
-    the Home Assistant Energy dashboard. The sensor state shows the cumulative kWh
-    for monitoring purposes, but the Energy dashboard should be configured to read
-    from the statistics (not this sensor) to properly display historical data on
-    the correct dates.
+    cost tracking. The sensor state shows the cumulative NZD spent for monitoring
+    purposes, but the Energy dashboard could be configured to read from the 
+    statistics to properly display historical cost data on the correct dates.
     """
 
     def __init__(
@@ -46,15 +45,15 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             name,
             api,
             icp,
-            UnitOfEnergy.KILO_WATT_HOUR,
-            "mdi:lightning-bolt",
+            CURRENCY_DOLLAR,
+            "mdi:currency-usd",
             state_class=SensorStateClass.TOTAL_INCREASING,
-            device_class=SensorDeviceClass.ENERGY,
+            device_class=SensorDeviceClass.MONETARY,
         )
 
         self._config_entry = config_entry
-        self._cumulative_kwh = 0.0
-        self._last_hour_usage = 0.0
+        self._cumulative_nzd = 0.0
+        self._last_hour_cost = 0.0
         self._first_run_complete = False
         self._fetched_hours: set = set()  # Track hour timestamps to prevent duplicates
         self._force_initial_backfill = True
@@ -62,8 +61,8 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
     @property
     def state(self) -> Optional[str]:
         """Return the state."""
-        if self._cumulative_kwh is not None:
-            return round(self._cumulative_kwh, 3)
+        if self._cumulative_nzd is not None:
+            return round(self._cumulative_nzd, 3)
         return None
 
     @property
@@ -74,7 +73,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             if self._last_update
             else None,
             "data_lag_days": API_DATA_LAG_DAYS,
-            "last_hour_usage": round(self._last_hour_usage, 3),
+            "last_hour_cost": round(self._last_hour_cost, 3),
             "first_run_complete": self._first_run_complete,
             "fetched_hours_count": len(self._fetched_hours),
         }
@@ -86,16 +85,16 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
         # Try to restore state from previous session
         if state := await self.async_get_last_state():
             try:
-                self._cumulative_kwh = float(state.state)
+                self._cumulative_nzd = float(state.state)
                 _LOGGER.info(
-                    "Restored cumulative kWh from previous session: %.3f kWh",
-                    self._cumulative_kwh,
+                    "Restored cumulative NZD from previous session: %.3f NZD",
+                    self._cumulative_nzd,
                 )
             except (ValueError, TypeError):
                 _LOGGER.warning(
                     "Could not restore state from previous session, starting fresh"
                 )
-                self._cumulative_kwh = 0.0
+                self._cumulative_nzd = 0.0
 
     async def async_update(self) -> None:
         """Update the sensor."""
@@ -113,7 +112,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 self._update_failures = 0  # Reset failure count on forced update
 
         try:
-            _LOGGER.debug("Beginning energy sensor update")
+            _LOGGER.debug("Beginning cost sensor update")
 
             # Check if API token is valid
             if not self._api._api_token:
@@ -137,7 +136,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
         except Exception as error:
             self._update_failures += 1
             _LOGGER.error(
-                "Error updating sensor (attempt %d): %s",
+                "Error updating cost sensor (attempt %d): %s",
                 self._update_failures,
                 str(error),
             )
@@ -148,17 +147,12 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 await self._api.async_login()
 
     async def _async_perform_backfill(self, now: datetime) -> None:
-        """Perform initial backfill of historical data.
-
-        Fetches many days of history on first setup to populate cumulative total.
-        """
+        """Perform initial backfill of historical cost data."""
         backfill_days = self._config_entry.data.get(
             CONF_INITIAL_BACKFILL_DAYS, 30
         )
-        _LOGGER.info("Starting initial backfill of %d days", backfill_days)
+        _LOGGER.info("Starting initial backfill of %d days for cost", backfill_days)
 
-        # Calculate the start date: today - backfill_days - API_DATA_LAG_DAYS
-        # We subtract lag days because the API has a 3-day lag
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = today - timedelta(
             days=backfill_days + API_DATA_LAG_DAYS
@@ -169,7 +163,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
         consecutive_empty_days = 0
 
         while current_date <= end_date:
-            _LOGGER.debug("Backfilling data for %s", current_date.strftime("%Y-%m-%d"))
+            _LOGGER.debug("Backfilling cost data for %s", current_date.strftime("%Y-%m-%d"))
 
             response = await self._api.get_usage(
                 str(current_date.year),
@@ -181,32 +175,27 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             if not response:
                 consecutive_empty_days += 1
                 _LOGGER.debug(
-                    "No data for %s (empty count: %d)",
+                    "No cost data for %s (empty count: %d)",
                     current_date.strftime("%Y-%m-%d"),
                     consecutive_empty_days,
                 )
 
-                # Stop early if we've hit 2 consecutive empty days
                 if consecutive_empty_days >= 2:
-                    _LOGGER.debug("Found 2 consecutive empty days, stopping backfill")
+                    _LOGGER.debug("Found 2 consecutive empty days, stopping cost backfill")
                     break
             else:
                 consecutive_empty_days = 0
-                await self._async_process_usage_data(response)
+                await self._async_process_cost_data(response)
 
             current_date += timedelta(days=1)
 
-        _LOGGER.info("Backfill complete. Cumulative kWh: %.3f", self._cumulative_kwh)
+        _LOGGER.info("Cost backfill complete. Cumulative NZD: %.3f", self._cumulative_nzd)
 
     async def _async_perform_incremental_update(self, now: datetime) -> None:
-        """Perform incremental update of recent data.
-
-        Fetches last N days to capture any new data while respecting API lag.
-        """
+        """Perform incremental update of recent cost data."""
         lookback_days = self._config_entry.data.get(CONF_DAILY_LOOKBACK_DAYS, 4)
-        _LOGGER.debug("Performing incremental update with %d-day lookback", lookback_days)
+        _LOGGER.debug("Performing incremental cost update with %d-day lookback", lookback_days)
 
-        # Calculate date range: today - lookback_days to today - API_DATA_LAG_DAYS
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = today - timedelta(days=lookback_days + API_DATA_LAG_DAYS)
         end_date = today - timedelta(days=API_DATA_LAG_DAYS)
@@ -225,43 +214,42 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             if not response:
                 consecutive_empty_days += 1
                 _LOGGER.debug(
-                    "No data for %s (incremental)",
+                    "No cost data for %s (incremental)",
                     current_date.strftime("%Y-%m-%d"),
                 )
 
-                # Stop early if we've hit 2 consecutive empty days
                 if consecutive_empty_days >= 2:
                     _LOGGER.debug(
-                        "Found 2 consecutive empty days, stopping incremental update"
+                        "Found 2 consecutive empty days, stopping incremental cost update"
                     )
                     break
             else:
                 consecutive_empty_days = 0
-                await self._async_process_usage_data(response)
+                await self._async_process_cost_data(response)
 
             current_date += timedelta(days=1)
 
         _LOGGER.debug(
-            "Incremental update complete. Cumulative kWh: %.3f",
-            self._cumulative_kwh,
+            "Incremental cost update complete. Cumulative NZD: %.3f",
+            self._cumulative_nzd,
         )
 
-    async def _async_process_usage_data(self, response: list) -> None:
-        """Process usage data points and update cumulative total.
+    async def _async_process_cost_data(self, response: list) -> None:
+        """Process cost data points and update cumulative total.
 
         De-duplicates against previously fetched hours to prevent double-counting.
-        Only processes paid energy (offpeakValue == "0.00").
+        Only processes paid energy cost (dollarValue).
         Creates statistics entries with proper historical timestamps.
         """
         if not response:
             return
 
-        hourly_kwh = 0.0
+        hourly_nzd = 0.0
         added_hours = 0
         statistics_data = []
 
         for point in response:
-            if not point.get("value"):
+            if not point.get("dollarValue"):
                 continue
 
             # Parse the timestamp
@@ -281,11 +269,11 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 _LOGGER.debug("Skipping duplicate hour: %s", hour_key)
                 continue
 
-            # Only count paid energy (free energy has offpeakValue != "0.00")
+            # Only count paid energy cost (offpeakDollarValue == "0.00" means no off-peak discount)
             if point.get("offpeakValue", "0.00") == "0.00":
-                kwh_value = float(point["value"])
-                hourly_kwh = kwh_value
-                self._cumulative_kwh += kwh_value
+                nzd_value = float(point["dollarValue"])
+                hourly_nzd = nzd_value
+                self._cumulative_nzd += nzd_value
                 self._fetched_hours.add(hour_key)
                 added_hours += 1
                 
@@ -293,36 +281,36 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 statistics_data.append(
                     StatisticData(
                         start=timestamp,
-                        sum=self._cumulative_kwh,
+                        sum=self._cumulative_nzd,
                     )
                 )
                 
                 _LOGGER.debug(
-                    "Added hour %s: %.3f kWh (cumulative: %.3f)",
+                    "Added hour %s: NZD%.3f (cumulative: NZD%.3f)",
                     hour_key,
-                    kwh_value,
-                    self._cumulative_kwh,
+                    nzd_value,
+                    self._cumulative_nzd,
                 )
 
-        self._last_hour_usage = hourly_kwh
+        self._last_hour_cost = hourly_nzd
 
         # Create statistics with proper historical timestamps
         if statistics_data:
-            _LOGGER.debug("Creating %d statistics entries with historical timestamps", len(statistics_data))
+            _LOGGER.debug("Creating %d cost statistics entries with historical timestamps", len(statistics_data))
             try:
                 icp = self._icp
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
-                    name=f"Contact Energy - Electricity ({icp})",
+                    name=f"Contact Energy - Electricity Cost ({icp})",
                     source=DOMAIN,
-                    statistic_id=f"{DOMAIN}:energy_consumption",
-                    unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+                    statistic_id=f"{DOMAIN}:energy_cost",
+                    unit_of_measurement=CURRENCY_DOLLAR,
                 )
                 async_add_external_statistics(self.hass, metadata, statistics_data)
-                _LOGGER.debug("Statistics entries created successfully")
+                _LOGGER.debug("Cost statistics entries created successfully")
             except Exception as error:
-                _LOGGER.error("Failed to create statistics entries: %s", error)
+                _LOGGER.error("Failed to create cost statistics entries: %s", error)
 
         if added_hours > 0:
-            _LOGGER.debug("Processed %d new hours", added_hours)
+            _LOGGER.debug("Processed %d new hours for cost", added_hours)

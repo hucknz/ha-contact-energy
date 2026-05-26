@@ -158,30 +158,32 @@ class ContactEnergyApi:
                         return data
                 raise
 
-    async def get_usage(self, year: str, month: str, day: str) -> Optional[list]:
+    async def get_usage(self, year: str, month: str, day: str, interval: str = "daily") -> Optional[list]:
         """Get usage data for a specific date with caching.
         
         Args:
             year: Year as string
             month: Month as string (no leading zero required)
             day: Day as string (no leading zero required)
+            interval: Interval type - "daily" for electricity, "monthly" for gas
             
         Returns:
-            List of hourly usage data points, or None if not available
+            List of usage data points, or None if not available
         """
         date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        cache_key = f"{date_str}_{interval}"
         now = datetime.now()
 
         # Check cache first
-        if date_str in self._usage_cache:
-            cached_entry = self._usage_cache[date_str]
+        if cache_key in self._usage_cache:
+            cached_entry = self._usage_cache[cache_key]
             cache_age = now - cached_entry["timestamp"]
             if cache_age < self._usage_cache_duration:
-                _LOGGER.debug("Using cached usage data for %s (age: %s)", date_str, cache_age)
+                _LOGGER.debug("Using cached usage data for %s (interval: %s, age: %s)", date_str, interval, cache_age)
                 return cached_entry["data"]
             else:
                 # Cache expired, remove it
-                del self._usage_cache[date_str]
+                del self._usage_cache[cache_key]
 
         if not self._api_token and not await self.async_login():
             _LOGGER.error("Failed to login when fetching usage data")
@@ -191,9 +193,9 @@ class ContactEnergyApi:
             _LOGGER.error("Missing contract ID or account ID")
             return None
 
-        url = f"{self._url_base}/usage/v2/{self._contractId}?ba={self._accountId}&interval=hourly&from={date_str}&to={date_str}"
+        url = f"{self._url_base}/usage/v2/{self._contractId}?ba={self._accountId}&interval={interval}&from={date_str}&to={date_str}"
         
-        _LOGGER.debug("Fetching usage data for %s from API", date_str)
+        _LOGGER.debug("Fetching usage data for %s (interval: %s) from API", date_str, interval)
         
         try:
             data = await self._async_request(
@@ -203,25 +205,25 @@ class ContactEnergyApi:
             )
             
             if data:
-                _LOGGER.debug("Successfully fetched %d hourly data points for %s", len(data), date_str)
+                _LOGGER.debug("Successfully fetched %d data points for %s (interval: %s)", len(data), date_str, interval)
                 # Cache the response
-                self._usage_cache[date_str] = {
+                self._usage_cache[cache_key] = {
                     "data": data,
                     "timestamp": now
                 }
                 return data
             
-            _LOGGER.debug("No usage data available for %s", date_str)
+            _LOGGER.debug("No usage data available for %s (interval: %s)", date_str, interval)
             return None
             
         except InvalidAuth:
             _LOGGER.debug("Token expired, attempting to login again")
             if await self.async_login():
                 # Retry the request with new token
-                return await self.get_usage(year, month, day)
+                return await self.get_usage(year, month, day, interval)
             return None
         except Exception as error:
-            _LOGGER.error("Failed to fetch usage data for %s: %s", date_str, error)
+            _LOGGER.error("Failed to fetch usage data for %s (interval: %s): %s", date_str, interval, error)
             return None
         
 class InvalidAuth(HomeAssistantError):

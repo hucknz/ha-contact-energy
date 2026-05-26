@@ -11,6 +11,8 @@ from custom_components.contact_energy.sensors import (
     ContactEnergyAccountSensor,
     ContactEnergyEnergySensor,
     ContactEnergyDailyEnergySensor,
+    ContactEnergyCostSensor,
+    ContactEnergyDailyCostSensor,
     ContactEnergyGasSensor,
     ContactEnergyDailyGasSensor,
 )
@@ -32,6 +34,8 @@ from custom_components.contact_energy.const import (
     CONTRACT_TYPE_GAS,
     SENSOR_ENERGY_NAME,
     SENSOR_DAILY_ENERGY_NAME,
+    SENSOR_COST_NAME,
+    SENSOR_DAILY_COST_NAME,
     SENSOR_GAS_NAME,
     SENSOR_DAILY_GAS_NAME,
     SENSOR_ACCOUNT_BALANCE_NAME,
@@ -73,6 +77,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ContactEnergyDailyEnergySensor(
                 hass,
                 SENSOR_DAILY_ENERGY_NAME,
+                api,
+                icp,
+                entry,
+            ),
+            ContactEnergyCostSensor(
+                hass,
+                SENSOR_COST_NAME,
+                api,
+                icp,
+                entry,
+            ),
+            ContactEnergyDailyCostSensor(
+                hass,
+                SENSOR_DAILY_COST_NAME,
                 api,
                 icp,
                 entry,
