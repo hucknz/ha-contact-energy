@@ -10,7 +10,9 @@ from homeassistant.components.sensor import (
 from custom_components.contact_energy.sensors import (
     ContactEnergyAccountSensor,
     ContactEnergyEnergySensor,
-    ContactEnergyDailyEnergySensor
+    ContactEnergyDailyEnergySensor,
+    ContactEnergyGasSensor,
+    ContactEnergyDailyGasSensor,
 )
 from custom_components.contact_energy.api import ContactEnergyApi
 
@@ -25,8 +27,13 @@ from custom_components.contact_energy.const import (
     CONF_ACCOUNT_ID, 
     CONF_CONTRACT_ID, 
     CONF_CONTRACT_ICP,
+    CONF_CONTRACT_TYPE,
+    CONTRACT_TYPE_ELECTRICITY,
+    CONTRACT_TYPE_GAS,
     SENSOR_ENERGY_NAME,
     SENSOR_DAILY_ENERGY_NAME,
+    SENSOR_GAS_NAME,
+    SENSOR_DAILY_GAS_NAME,
     SENSOR_ACCOUNT_BALANCE_NAME,
     SENSOR_NEXT_BILL_AMOUNT_NAME,
     SENSOR_NEXT_BILL_DATE_NAME,
@@ -45,26 +52,52 @@ SCAN_INTERVAL = timedelta(hours=1)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     """Set up Contact Energy sensors from a config entry."""
     icp = entry.data[CONF_CONTRACT_ICP]
+    contract_type = entry.data.get(CONF_CONTRACT_TYPE, CONTRACT_TYPE_ELECTRICITY)
 
     # Get the stored API instance and entry data
     entry_data = hass.data[DOMAIN][entry.entry_id]
     api = entry_data["api"]
 
-    sensors = [
-        ContactEnergyEnergySensor(
-            hass,
-            SENSOR_ENERGY_NAME,
-            api,
-            icp,
-            entry,
-        ),
-        ContactEnergyDailyEnergySensor(
-            hass,
-            SENSOR_DAILY_ENERGY_NAME,
-            api,
-            icp,
-            entry,
-        ),
+    sensors = []
+
+    # Add consumption sensors based on contract type
+    if contract_type == CONTRACT_TYPE_ELECTRICITY:
+        sensors.extend([
+            ContactEnergyEnergySensor(
+                hass,
+                SENSOR_ENERGY_NAME,
+                api,
+                icp,
+                entry,
+            ),
+            ContactEnergyDailyEnergySensor(
+                hass,
+                SENSOR_DAILY_ENERGY_NAME,
+                api,
+                icp,
+                entry,
+            ),
+        ])
+    elif contract_type == CONTRACT_TYPE_GAS:
+        sensors.extend([
+            ContactEnergyGasSensor(
+                hass,
+                SENSOR_GAS_NAME,
+                api,
+                icp,
+                entry,
+            ),
+            ContactEnergyDailyGasSensor(
+                hass,
+                SENSOR_DAILY_GAS_NAME,
+                api,
+                icp,
+                entry,
+            ),
+        ])
+
+    # Add account sensors (available for all contract types)
+    sensors.extend([
         ContactEnergyAccountSensor(
             hass,
             SENSOR_ACCOUNT_BALANCE_NAME,
@@ -154,5 +187,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 "%d %b %Y"
             ).date().isoformat(),
         ),
-    ]
+    ])
     async_add_entities(sensors, True)

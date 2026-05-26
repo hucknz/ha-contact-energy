@@ -19,7 +19,10 @@ from .const import (
     CONF_DAILY_LOOKBACK_DAYS,
     CONF_ACCOUNT_ID,
     CONF_CONTRACT_ID,
-    CONF_CONTRACT_ICP
+    CONF_CONTRACT_ICP,
+    CONF_CONTRACT_TYPE,
+    CONTRACT_TYPE_ELECTRICITY,
+    CONTRACT_TYPE_GAS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,21 +55,29 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             _LOGGER.error("No accounts found for email: %s", data[CONF_EMAIL])
             raise UnknownError("No accounts found")
 
-        # Extract available contracts
+        # Extract available contracts (both electricity and gas)
         account_id = accounts_data["accountDetail"]["id"]
         contracts = []
-        for contract in accounts_data["accountDetail"]["contracts"]:
-            if contract["contractType"] == 1:  # Electricity contracts only
+        all_contracts = accounts_data["accountDetail"]["contracts"]
+        
+        for contract in all_contracts:
+            contract_type = contract.get("contractType")
+            type_label = contract.get("contractTypeLabel", "Unknown")
+            
+            # Include both electricity and gas contracts
+            if contract_type in (CONTRACT_TYPE_ELECTRICITY, CONTRACT_TYPE_GAS):
                 contracts.append({
                     "id": contract["id"],
                     "address": contract["premise"]["supplyAddress"]["shortForm"],
                     "account_id": account_id,
-                    "icp": contract["icp"]
+                    "icp": contract["icp"],
+                    "contract_type": contract_type,
+                    "type_label": type_label,
                 })
         
         if not contracts:
-            _LOGGER.error("No electricity contracts found for email: %s", data[CONF_EMAIL])
-            raise UnknownError("No electricity contracts found")
+            _LOGGER.error("No contracts found for email: %s", data[CONF_EMAIL])
+            raise UnknownError("No contracts found")
         
         _LOGGER.info("Successfully authenticated Contact Energy account: %s", data[CONF_EMAIL])
         return {
@@ -112,21 +123,8 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._contracts = self._validated_data["contracts"]
                 self._current_input.update(user_input)
                 
-                # If only one contract is available, skip the selection step
-                if len(self._contracts) == 1:
-                    contract = self._contracts[0]
-                    user_input[CONF_ACCOUNT_ID] = contract["account_id"]
-                    user_input[CONF_CONTRACT_ID] = contract["id"]
-                    user_input[CONF_CONTRACT_ICP] = contract["icp"]
-                    
-                    await self.async_set_unique_id(contract["id"])
-                    self._abort_if_unique_id_configured()
-                    
-                    return self.async_create_entry(
-                        title=f"{self._validated_data['title']} - {contract['address']}",
-                        data=user_input
-                    )
-                
+                # Always go to contract selection (even with one contract)
+                # This allows users to set it up, or skip if they prefer
                 return await self.async_step_contract()
                 
             except InvalidAuth:
@@ -163,12 +161,14 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._current_input[CONF_ACCOUNT_ID] = selected_contract["account_id"]
                 self._current_input[CONF_CONTRACT_ID] = selected_contract["id"]
                 self._current_input[CONF_CONTRACT_ICP] = selected_contract['icp']
+                self._current_input[CONF_CONTRACT_TYPE] = selected_contract['contract_type']
                 
                 await self.async_set_unique_id(selected_contract["id"])
                 self._abort_if_unique_id_configured()
                 
+                type_label = selected_contract.get('type_label', 'Unknown')
                 return self.async_create_entry(
-                    title=f"{self._validated_data['title']} - {selected_contract['address']}",
+                    title=f"{self._validated_data['title']} - {selected_contract['address']} ({type_label})",
                     data=self._current_input
                 )
             else:
@@ -177,7 +177,7 @@ class ContactEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Create schema for contract selection
         contract_schema = vol.Schema({
             vol.Required(CONF_CONTRACT_ID): vol.In({
-                c["id"]: f"{c['id']} - {c['address']}"
+                c["id"]: f"{c['type_label']} - {c['address']}"
                 for c in self._contracts
             }),
         })

@@ -10,8 +10,14 @@ DOMAIN_NAME = "Contact Energy"
 SCAN_INTERVAL = timedelta(hours=1)
 FORCED_SCAN_INTERVAL = timedelta(hours=24)
 
+# Electricity sensor names
 SENSOR_ENERGY_NAME = "Total Energy"
 SENSOR_DAILY_ENERGY_NAME = "Daily Energy"
+
+# Gas sensor names
+SENSOR_GAS_NAME = "Total Gas"
+SENSOR_DAILY_GAS_NAME = "Daily Gas"
+
 SENSOR_USAGE_NAME = "Usage"
 SENSOR_SOLD_NAME = "Sold"
 SENSOR_PRICES_NAME = "Prices"
@@ -24,10 +30,14 @@ SENSOR_PAYMENT_DUE_DATE_NAME = "Payment Due Date"
 SENSOR_PREVIOUS_READING_DATE_NAME = "Previous Reading Date"
 SENSOR_NEXT_READING_DATE_NAME = "Next Reading Date"
 
+# Contract types
+CONTRACT_TYPE_ELECTRICITY = 1
+CONTRACT_TYPE_GAS = 2
 
 CONF_ACCOUNT_ID = "account_id"
 CONF_CONTRACT_ID = "contract_id"
 CONF_CONTRACT_ICP = "contract_icp"
+CONF_CONTRACT_TYPE = "contract_type"
 CONF_PRICES = "prices"
 CONF_USAGE = "usage"
 CONF_SOLD = "sold"
