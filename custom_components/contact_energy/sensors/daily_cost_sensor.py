@@ -60,7 +60,7 @@ class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
     def state(self) -> Optional[str]:
         """Return the state."""
         if self._daily_nzd is not None:
-            return round(self._daily_nzd, 3)
+            return str(round(self._daily_nzd, 3))
         return None
 
     @property
@@ -308,12 +308,15 @@ class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
                     )
                 ]
                 
+                # Use a unique statistic_id per date to avoid overwrites
+                statistic_id = f"{DOMAIN}:daily_energy_cost_{date.strftime('%Y%m%d')}"
+                
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
                     name=f"Contact Energy - Daily Electricity Cost ({icp})",
                     source=DOMAIN,
-                    statistic_id=f"{DOMAIN}:daily_energy_cost",
+                    statistic_id=statistic_id,
                     unit_of_measurement=CURRENCY_DOLLAR,
                 )
                 
