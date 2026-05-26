@@ -8,6 +8,7 @@ from homeassistant.components.recorder.models import StatisticData, StatisticMet
 from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.const import CURRENCY_DOLLAR
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from custom_components.contact_energy.sensors.base_sensor import BaseSensor
 from custom_components.contact_energy.const import (
@@ -52,6 +53,7 @@ class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
         self._config_entry = config_entry
         self._daily_nzd = 0.0
         self._current_date = None
+        self._most_recent_date = None  # Track most recent day with data for state display
         self._first_run_complete = False
         self._force_initial_backfill = True
         self._last_daily_update = None
@@ -291,15 +293,18 @@ class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
                 daily_total,
             )
             
-            # If this is the current day, update the sensor state
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            if date == today:
-                self._daily_nzd = daily_total
+            # Always update state with the most recent day's data
+            # Due to 3-day API lag, "today" never has data, so use most recent processed day
+            self._daily_nzd = daily_total
+            self._most_recent_date = date
             
             # Create statistics entry for all days (both past and current)
             try:
                 icp = self._icp
-                stat_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                # Use timezone-aware midnight of the target date as statistic start time
+                stat_start = dt_util.as_local(
+                    date.replace(hour=0, minute=0, second=0, microsecond=0)
+                )
                 
                 statistics_data = [
                     StatisticData(
@@ -308,15 +313,13 @@ class ContactEnergyDailyCostSensor(BaseSensor, RestoreEntity):
                     )
                 ]
                 
-                # Use a unique statistic_id per date to avoid overwrites
-                statistic_id = f"{DOMAIN}:daily_energy_cost_{date.strftime('%Y%m%d')}"
-                
+                # Use stable ID so all daily data points go into one statistics series
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
                     name=f"Contact Energy - Daily Electricity Cost ({icp})",
                     source=DOMAIN,
-                    statistic_id=statistic_id,
+                    statistic_id=f"{DOMAIN}:daily_energy_cost",
                     unit_of_measurement=CURRENCY_DOLLAR,
                 )
                 

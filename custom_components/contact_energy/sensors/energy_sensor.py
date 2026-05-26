@@ -282,6 +282,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
                 continue
 
             # Only count paid energy (free energy has offpeakValue != "0.00")
+            # Default "0.00" treats missing field as paid energy - assumes API always includes this field for valid readings
             if point.get("offpeakValue", "0.00") == "0.00":
                 kwh_value = float(point["value"])
                 hourly_kwh = kwh_value

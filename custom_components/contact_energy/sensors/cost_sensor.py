@@ -269,7 +269,8 @@ class ContactEnergyCostSensor(BaseSensor, RestoreEntity):
                 _LOGGER.debug("Skipping duplicate hour: %s", hour_key)
                 continue
 
-            # Only count paid energy cost (offpeakDollarValue == "0.00" means no off-peak discount)
+            # Only count paid energy cost (free energy has offpeakValue != "0.00")
+            # Default "0.00" treats missing field as paid energy - assumes API always includes this field for valid readings
             if point.get("offpeakValue", "0.00") == "0.00":
                 nzd_value = float(point["dollarValue"])
                 hourly_nzd = nzd_value
