@@ -34,7 +34,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Optional(CONF_INITIAL_BACKFILL_DAYS, default=30): cv.positive_int,
         vol.Optional(CONF_DAILY_LOOKBACK_DAYS, default=4): vol.All(
             cv.positive_int,
-            vol.Range(min=3),  # Must be at least 3 to account for 3-day API lag
+            vol.Range(min=4),  # Must be at least 4 to ensure incremental updates reach back far enough with 3-day API lag
         ),
     }
 )

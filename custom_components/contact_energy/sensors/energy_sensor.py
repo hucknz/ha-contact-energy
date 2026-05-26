@@ -264,11 +264,21 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             if not point.get("value"):
                 continue
 
-            # Parse the timestamp
+            # Parse the timestamp (ISO 8601 format with milliseconds and timezone)
+            # e.g., "2026-05-24T00:00:00.000+12:00"
             try:
-                timestamp = datetime.strptime(
-                    point["date"], "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                # datetime.fromisoformat() doesn't handle colon in timezone offset in Python <3.11
+                # So we normalize it: "...+12:00" -> "...+1200"
+                timestamp_str = point["date"]
+                if "+" in timestamp_str:
+                    base, tz = timestamp_str.rsplit("+", 1)
+                    timestamp_str = base + "+" + tz.replace(":", "")
+                elif timestamp_str.count("-") > 2:  # More than 2 hyphens = has timezone
+                    base = timestamp_str.rsplit("-", 1)[0]
+                    tz = timestamp_str.rsplit("-", 1)[1]
+                    timestamp_str = base + "-" + tz.replace(":", "")
+                
+                timestamp = datetime.fromisoformat(timestamp_str)
             except ValueError:
                 _LOGGER.warning("Could not parse timestamp: %s", point["date"])
                 continue
