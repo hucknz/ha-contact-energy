@@ -53,10 +53,11 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
         self._config_entry = config_entry
         self._daily_m3 = 0.0
         self._current_date = None
-        self._most_recent_date = None  # Track most recent day with data for state display
+        self._most_recent_date = None  # Track most recent month with data for state display
         self._first_run_complete = False
         self._force_initial_backfill = True
         self._last_daily_update = None
+        self._cumulative_stat_sum = 0.0  # Running cumulative total for statistics
 
     @property
     def state(self) -> Optional[str]:
@@ -169,169 +170,174 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
                 await self._api.async_login()
 
     async def _async_perform_backfill(self, now: datetime) -> None:
-        """Perform initial backfill of daily gas totals."""
-        backfill_days = self._config_entry.data.get(
-            "initial_backfill_days", 30
+        """Perform initial backfill of monthly gas totals."""
+        # Treat initial_backfill_days as months for gas (data is monthly only)
+        backfill_months = self._config_entry.data.get(
+            "initial_backfill_days", 12
         )
-        _LOGGER.info("Starting initial backfill of %d days for daily gas", backfill_days)
+        _LOGGER.info("Starting initial backfill of %d months for gas", backfill_months)
 
-        # Calculate date range
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_date = today - timedelta(
-            days=backfill_days + API_DATA_LAG_DAYS
-        )
-        end_date = today - timedelta(days=API_DATA_LAG_DAYS)
+        # Calculate start month: backfill_months ago, normalised to the 1st
+        today_first = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # Subtract backfill_months from today_first
+        start_month_num = today_first.month - backfill_months
+        start_year = today_first.year
+        while start_month_num <= 0:
+            start_month_num += 12
+            start_year -= 1
+        start_date = today_first.replace(year=start_year, month=start_month_num)
+
+        # End at the last completed month (not the current month)
+        if today_first.month == 1:
+            end_date = today_first.replace(year=today_first.year - 1, month=12)
+        else:
+            end_date = today_first.replace(month=today_first.month - 1)
 
         current_date = start_date
-        consecutive_empty_days = 0
+        consecutive_empty_months = 0
+        self._cumulative_stat_sum = 0.0  # Reset cumulative sum at start of each backfill
 
         while current_date <= end_date:
-            _LOGGER.debug("Backfilling daily gas total for %s", current_date.strftime("%Y-%m-%d"))
+            _LOGGER.debug(
+                "Backfilling gas total for %s-%02d",
+                current_date.year,
+                current_date.month,
+            )
 
+            # Query the first day of the month with interval=monthly
             response = await self._api.get_usage(
                 str(current_date.year),
                 str(current_date.month),
-                str(current_date.day),
-                interval="monthly"
+                "1",
+                interval="monthly",
             )
 
             if not response:
-                consecutive_empty_days += 1
+                consecutive_empty_months += 1
                 _LOGGER.debug(
-                    "No daily gas data for %s (empty count: %d)",
-                    current_date.strftime("%Y-%m-%d"),
-                    consecutive_empty_days,
+                    "No gas data for %s-%02d (empty count: %d)",
+                    current_date.year,
+                    current_date.month,
+                    consecutive_empty_months,
                 )
-
-                # Stop early if we've hit 2 consecutive empty days
-                if consecutive_empty_days >= 2:
-                    _LOGGER.debug("Found 2 consecutive empty days, stopping daily gas backfill")
+                if consecutive_empty_months >= 2:
+                    _LOGGER.debug("Found 2 consecutive empty months, stopping gas backfill")
                     break
             else:
-                consecutive_empty_days = 0
-                await self._async_process_daily_total(response, current_date)
+                consecutive_empty_months = 0
+                await self._async_process_monthly_total(response, current_date)
 
-            current_date += timedelta(days=1)
+            # Advance to next month
+            if current_date.month == 12:
+                current_date = current_date.replace(year=current_date.year + 1, month=1)
+            else:
+                current_date = current_date.replace(month=current_date.month + 1)
 
-        _LOGGER.info("Daily gas backfill complete. Current daily m³: %.3f", self._daily_m3)
+        _LOGGER.info("Gas backfill complete. Cumulative gas: %.3f m³", self._cumulative_stat_sum)
 
     async def _async_perform_incremental_update(self, now: datetime) -> None:
-        """Perform incremental update for recent days (catch-up for days after backfill).
-        
-        Fetches the last `lookback_days` of data that are available (accounting for API lag).
-        This ensures we catch daily data as it becomes available without waiting for the next backfill.
-        """
-        lookback_days = self._config_entry.data.get("daily_lookback_days", 4)
-        _LOGGER.debug("Performing incremental daily gas update (lookback: %d days)", lookback_days)
+        """Perform incremental update - check if the previous month's data is available."""
+        _LOGGER.debug("Performing incremental gas update")
 
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        
-        # Fetch data from lookback window up to the most recent available day
-        # Most recent available = today - lag_days (data from 3 days ago)
-        end_date = today - timedelta(days=API_DATA_LAG_DAYS)
-        start_date = end_date - timedelta(days=lookback_days)
-        
-        _LOGGER.debug(
-            "Incremental gas update range: %s to %s (with %d-day lag)",
-            start_date.strftime("%Y-%m-%d"),
-            end_date.strftime("%Y-%m-%d"),
-            API_DATA_LAG_DAYS,
+        today_first = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        # Previous completed month
+        if today_first.month == 1:
+            prev_month = today_first.replace(year=today_first.year - 1, month=12)
+        else:
+            prev_month = today_first.replace(month=today_first.month - 1)
+
+        response = await self._api.get_usage(
+            str(prev_month.year),
+            str(prev_month.month),
+            "1",
+            interval="monthly",
         )
 
-        current_date = start_date
-        updates_attempted = 0
-        updates_succeeded = 0
-        
-        while current_date <= end_date:
-            updates_attempted += 1
-            response = await self._api.get_usage(
-                str(current_date.year),
-                str(current_date.month),
-                str(current_date.day),
-                interval="monthly"
+        if response:
+            await self._async_process_monthly_total(response, prev_month)
+            _LOGGER.debug(
+                "Updated gas statistics for %s-%02d",
+                prev_month.year,
+                prev_month.month,
+            )
+        else:
+            _LOGGER.debug(
+                "No gas data available for %s-%02d",
+                prev_month.year,
+                prev_month.month,
             )
 
-            if response:
-                await self._async_process_daily_total(response, current_date)
-                updates_succeeded += 1
-            
-            current_date += timedelta(days=1)
-        
-        _LOGGER.debug(
-            "Incremental daily gas update complete. %d/%d days updated. Current daily m³: %.3f",
-            updates_succeeded,
-            updates_attempted,
-            self._daily_m3,
-        )
+    async def _async_process_monthly_total(self, response: list, month_date: datetime) -> None:
+        """Calculate and store monthly gas total.
 
-    async def _async_process_daily_total(self, response: list, date: datetime) -> None:
-        """Calculate and store daily gas total from daily data.
-        
         Creates both:
-        - Sensor state update (only for current day)
-        - Statistics entry (for all days, used by Energy dashboard)
-        
+        - Sensor state update (most recent month's value)
+        - Statistics entry (for Energy dashboard, cumulative sum per month)
+
         Args:
-            response: List of daily data points
-            date: The date for which we're calculating the daily total
+            response: List of data points returned by the monthly API
+            month_date: The first day of the month for which we have data
         """
         if not response:
             return
 
-        daily_total = 0.0
+        monthly_total = 0.0
 
         for point in response:
             if not point.get("value"):
                 continue
+            monthly_total += float(point["value"])
 
-            daily_total += float(point["value"])
-
-        if daily_total > 0:
+        if monthly_total > 0:
             _LOGGER.debug(
-                "Daily gas total for %s: %.3f m³",
-                date.strftime("%Y-%m-%d"),
-                daily_total,
+                "Monthly gas total for %s-%02d: %.3f m³",
+                month_date.year,
+                month_date.month,
+                monthly_total,
             )
-            
-            # Always update state with the most recent day's data
-            # Due to 3-day API lag, "today" never has data, so use most recent processed day
-            self._daily_m3 = daily_total
-            self._most_recent_date = date
-            
-            # Create statistics entry for all days (both past and current)
+
+            self._daily_m3 = monthly_total
+            self._most_recent_date = month_date
+
             try:
                 icp = self._icp
-                # Use timezone-aware midnight of the target date as statistic start time
+                # Statistics entry at midnight on the 1st of each month
                 stat_start = dt_util.as_local(
-                    date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    month_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 )
-                
+
+                self._cumulative_stat_sum += monthly_total
+
                 statistics_data = [
                     StatisticData(
                         start=stat_start,
-                        sum=daily_total,
+                        sum=self._cumulative_stat_sum,
                     )
                 ]
-                
-                # Use stable ID so all daily data points go into one statistics series
+
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
-                    name=f"Contact Energy - Daily Gas ({icp})",
+                    name=f"Contact Energy - Monthly Gas ({icp})",
                     source=DOMAIN,
-                    statistic_id=f"{DOMAIN}:daily_gas_consumption",
+                    statistic_id=f"{DOMAIN}:monthly_gas_consumption",
                     unit_of_measurement=UnitOfVolume.CUBIC_METERS,
                 )
-                
+
                 async_add_external_statistics(self.hass, metadata, statistics_data)
                 _LOGGER.debug(
-                    "Created statistics entry for daily gas on %s: %.3f m³",
-                    date.strftime("%Y-%m-%d"),
-                    daily_total,
+                    "Created statistics entry for gas month %s-%02d: %.3f m³ (cumulative: %.3f)",
+                    month_date.year,
+                    month_date.month,
+                    monthly_total,
+                    self._cumulative_stat_sum,
                 )
             except Exception as error:
                 _LOGGER.error(
-                    "Failed to create statistics for daily gas on %s: %s",
-                    date.strftime("%Y-%m-%d"),
+                    "Failed to create statistics for gas month %s-%02d: %s",
+                    month_date.year,
+                    month_date.month,
                     str(error),
                 )

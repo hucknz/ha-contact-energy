@@ -57,6 +57,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         self._first_run_complete = False
         self._force_initial_backfill = True
         self._last_daily_update = None
+        self._cumulative_stat_sum = 0.0  # Running cumulative total for statistics
 
     @property
     def state(self) -> Optional[str]:
@@ -184,6 +185,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
 
         current_date = start_date
         consecutive_empty_days = 0
+        self._cumulative_stat_sum = 0.0  # Reset cumulative sum at start of each backfill
 
         while current_date <= end_date:
             _LOGGER.debug("Backfilling daily total for %s", current_date.strftime("%Y-%m-%d"))
@@ -315,10 +317,12 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                     date.replace(hour=0, minute=0, second=0, microsecond=0)
                 )
                 
+                self._cumulative_stat_sum += daily_total
+
                 statistics_data = [
                     StatisticData(
                         start=stat_start,
-                        sum=daily_total,
+                        sum=self._cumulative_stat_sum,
                     )
                 ]
                 
