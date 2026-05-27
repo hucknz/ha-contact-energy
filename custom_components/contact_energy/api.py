@@ -199,7 +199,7 @@ class ContactEnergyApi:
         
         try:
             data = await self._async_request(
-                "GET",
+                "POST",
                 url,
                 headers=self._get_headers()
             )
