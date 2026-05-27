@@ -117,7 +117,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         )
 
     async def async_update(self) -> None:
-        """Update the sensor once per day."""
+        """Update the sensor."""
         now = datetime.now()
 
         # Check if we need to reset for a new day
@@ -130,29 +130,34 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
             self._daily_kwh = 0.0
             self._current_date = today
 
-        # Determine if we should update today
-        # Only update once per day, around midnight or at a specific hour
+        # Ensure we're logged in before any API calls
+        if not self._api._api_token:
+            _LOGGER.debug("Not logged in, attempting login...")
+            if not await self._api.async_login():
+                _LOGGER.error("Failed to login - check credentials")
+                self._update_failures += 1
+                return
+
+        # Always update the display state on every hourly poll.
+        # Shows the intra-day cumulative kWh for the most recent available day
+        # (today - API_DATA_LAG_DAYS), summed only up to the current hour.
+        # This mirrors the Glow sensor pattern: rises through the day, resets at midnight.
+        await self._update_display_state(now)
+        self._last_update = now
+
+        # Statistics writing is throttled to once per 23 hours (API-heavy operation)
         if self._last_daily_update:
             time_since_update = now - self._last_daily_update
             if time_since_update < timedelta(hours=23):
                 _LOGGER.debug(
-                    "Skipping daily update (last update %.1f hours ago)",
+                    "Skipping statistics update (last update %.1f hours ago)",
                     time_since_update.total_seconds() / 3600,
                 )
                 return
 
         try:
-            _LOGGER.debug("Beginning daily energy update")
+            _LOGGER.debug("Beginning daily statistics update")
 
-            # Check if API token is valid
-            if not self._api._api_token:
-                _LOGGER.debug("Not logged in, attempting login...")
-                if not await self._api.async_login():
-                    _LOGGER.error("Failed to login - check credentials")
-                    self._update_failures += 1
-                    return
-
-            # Determine fetch strategy based on first-run status
             if self._force_initial_backfill or not self._first_run_complete:
                 await self._async_perform_backfill(now)
                 self._first_run_complete = True
@@ -161,7 +166,6 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                 await self._async_perform_incremental_update(now)
 
             self._last_daily_update = now
-            self._last_update = now
             self._update_failures = 0
 
         except Exception as error:
@@ -176,6 +180,48 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
             if self._update_failures >= 3:
                 _LOGGER.warning("Multiple update failures, attempting to re-login")
                 await self._api.async_login()
+
+    async def _update_display_state(self, now: datetime) -> None:
+        """Update sensor state to show intra-day cumulative for the most recent available day.
+
+        Sums hourly values from (today - API_DATA_LAG_DAYS) only up to the current hour,
+        so the state naturally rises through the day and resets to 0 at midnight —
+        the same pattern as a live pulse-counter sensor like Home Assistant Glow.
+        """
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        target_date = today - timedelta(days=API_DATA_LAG_DAYS)
+        current_hour = now.hour
+
+        response = await self._api.get_usage(
+            str(target_date.year),
+            str(target_date.month),
+            str(target_date.day),
+            interval="hourly",
+        )
+
+        if not response:
+            _LOGGER.debug(
+                "No display data available for %s", target_date.strftime("%Y-%m-%d")
+            )
+            return
+
+        cumulative = 0.0
+        for point in sorted(response, key=lambda p: int(p.get("hour", 0))):
+            hour = int(point.get("hour", 0))
+            if hour > current_hour:
+                break
+            if point.get("offpeakValue", "0.00") != "0.00":
+                continue
+            if point.get("value"):
+                cumulative += float(point["value"])
+
+        self._daily_kwh = cumulative
+        _LOGGER.debug(
+            "Display state: %.3f kWh (%s through hour %02d:00)",
+            cumulative,
+            target_date.strftime("%Y-%m-%d"),
+            current_hour,
+        )
 
     async def _async_perform_backfill(self, now: datetime) -> None:
         """Perform initial backfill of daily totals."""
@@ -349,9 +395,6 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                 daily_total,
                 len(statistics_data),
             )
-
-            self._daily_kwh = daily_total
-            self._most_recent_date = date
 
             try:
                 icp = self._icp
