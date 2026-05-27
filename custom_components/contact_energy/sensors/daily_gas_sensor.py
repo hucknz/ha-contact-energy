@@ -303,9 +303,13 @@ class ContactEnergyDailyGasSensor(BaseSensor, RestoreEntity):
 
             try:
                 icp = self._icp
-                # Statistics entry at midnight on the 1st of each month
-                stat_start = dt_util.as_local(
-                    month_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                # month_date is a naive local datetime (from datetime.now()).
+                # dt_util.as_local() treats naive datetimes as UTC, which would
+                # shift NZ timestamps by +12h. Use dt_util.now() to get the
+                # local tzinfo and attach it directly to midnight of the target date.
+                stat_start = dt_util.now().replace(
+                    year=month_date.year, month=month_date.month, day=1,
+                    hour=0, minute=0, second=0, microsecond=0
                 )
 
                 self._cumulative_stat_sum += monthly_total

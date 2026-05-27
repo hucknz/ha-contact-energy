@@ -167,6 +167,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
 
         current_date = start_date
         consecutive_empty_days = 0
+        found_any_data = False
 
         while current_date <= end_date:
             _LOGGER.debug("Backfilling data for %s", current_date.strftime("%Y-%m-%d"))
@@ -179,18 +180,20 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             )
 
             if not response:
-                consecutive_empty_days += 1
-                _LOGGER.debug(
-                    "No data for %s (empty count: %d)",
-                    current_date.strftime("%Y-%m-%d"),
-                    consecutive_empty_days,
-                )
-
-                # Stop early if we've hit 2 consecutive empty days
-                if consecutive_empty_days >= 2:
-                    _LOGGER.debug("Found 2 consecutive empty days, stopping backfill")
-                    break
+                if found_any_data:
+                    consecutive_empty_days += 1
+                    _LOGGER.debug(
+                        "No data for %s (empty count: %d)",
+                        current_date.strftime("%Y-%m-%d"),
+                        consecutive_empty_days,
+                    )
+                    if consecutive_empty_days >= 2:
+                        _LOGGER.debug("Found 2 consecutive empty days, stopping backfill")
+                        break
+                else:
+                    _LOGGER.debug("No data for %s (before API window, skipping)", current_date.strftime("%Y-%m-%d"))
             else:
+                found_any_data = True
                 consecutive_empty_days = 0
                 await self._async_process_usage_data(response)
 
@@ -213,6 +216,7 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
 
         current_date = start_date
         consecutive_empty_days = 0
+        found_any_data = False
 
         while current_date <= end_date:
             response = await self._api.get_usage(
@@ -223,19 +227,21 @@ class ContactEnergyEnergySensor(BaseSensor, RestoreEntity):
             )
 
             if not response:
-                consecutive_empty_days += 1
-                _LOGGER.debug(
-                    "No data for %s (incremental)",
-                    current_date.strftime("%Y-%m-%d"),
-                )
-
-                # Stop early if we've hit 2 consecutive empty days
-                if consecutive_empty_days >= 2:
+                if found_any_data:
+                    consecutive_empty_days += 1
                     _LOGGER.debug(
-                        "Found 2 consecutive empty days, stopping incremental update"
+                        "No data for %s (incremental)",
+                        current_date.strftime("%Y-%m-%d"),
                     )
-                    break
+                    if consecutive_empty_days >= 2:
+                        _LOGGER.debug(
+                            "Found 2 consecutive empty days, stopping incremental update"
+                        )
+                        break
+                else:
+                    _LOGGER.debug("No data for %s (before API window, skipping)", current_date.strftime("%Y-%m-%d"))
             else:
+                found_any_data = True
                 consecutive_empty_days = 0
                 await self._async_process_usage_data(response)
 

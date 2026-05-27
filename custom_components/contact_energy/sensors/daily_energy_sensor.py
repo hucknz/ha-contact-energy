@@ -185,6 +185,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
 
         current_date = start_date
         consecutive_empty_days = 0
+        found_any_data = False
         self._cumulative_stat_sum = 0.0  # Reset cumulative sum at start of each backfill
 
         while current_date <= end_date:
@@ -198,18 +199,23 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
             )
 
             if not response:
-                consecutive_empty_days += 1
-                _LOGGER.debug(
-                    "No hourly data for %s (empty count: %d)",
-                    current_date.strftime("%Y-%m-%d"),
-                    consecutive_empty_days,
-                )
-
-                # Stop early if we've hit 2 consecutive empty days
-                if consecutive_empty_days >= 2:
-                    _LOGGER.debug("Found 2 consecutive empty days, stopping backfill")
-                    break
+                # Only count consecutive empty days after we've found at least one day
+                # with data. Without this guard, a backfill starting before the API's
+                # available data window would stop immediately and never reach real data.
+                if found_any_data:
+                    consecutive_empty_days += 1
+                    _LOGGER.debug(
+                        "No hourly data for %s (empty count: %d)",
+                        current_date.strftime("%Y-%m-%d"),
+                        consecutive_empty_days,
+                    )
+                    if consecutive_empty_days >= 2:
+                        _LOGGER.debug("Found 2 consecutive empty days after data, stopping backfill")
+                        break
+                else:
+                    _LOGGER.debug("No data for %s (before API window, skipping)", current_date.strftime("%Y-%m-%d"))
             else:
+                found_any_data = True
                 consecutive_empty_days = 0
                 await self._async_process_daily_total(response, current_date)
 
@@ -311,10 +317,13 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
             # with proper timestamps even though sensor state only shows today
             try:
                 icp = self._icp
-                # Use timezone-aware midnight of the target date as statistic start time
-                # datetime.now() is naive, so convert to local time first
-                stat_start = dt_util.as_local(
-                    date.replace(hour=0, minute=0, second=0, microsecond=0)
+                # date is a naive local datetime (from datetime.now()).
+                # dt_util.as_local() treats naive datetimes as UTC, which would
+                # shift NZ timestamps by +12h. Use dt_util.now() to get the
+                # local tzinfo and attach it directly to midnight of the target date.
+                stat_start = dt_util.now().replace(
+                    year=date.year, month=date.month, day=date.day,
+                    hour=0, minute=0, second=0, microsecond=0
                 )
                 
                 self._cumulative_stat_sum += daily_total
