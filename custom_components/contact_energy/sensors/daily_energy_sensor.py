@@ -57,7 +57,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         self._first_run_complete = False
         self._force_initial_backfill = True
         self._last_daily_update = None
-        self._cumulative_stat_sum = 0.0  # Running cumulative total for statistics
+        self._cumulative_stat_sum = 0.0  # Monotonically increasing total across all hours
 
     @property
     def state(self) -> Optional[str]:
@@ -89,19 +89,27 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         """Handle entity added to hass."""
         await super().async_added_to_hass()
 
-        # Try to restore state from previous session
+        # Try to restore state from previous session.
+        # Only apply the restore if async_update hasn't already populated _daily_kwh
+        # via the backfill (which can run concurrently with async_added_to_hass).
         if state := await self.async_get_last_state():
-            try:
-                self._daily_kwh = float(state.state)
+            if not self._first_run_complete:
+                try:
+                    self._daily_kwh = float(state.state)
+                    _LOGGER.debug(
+                        "Restored daily kWh from previous session: %.3f kWh",
+                        self._daily_kwh,
+                    )
+                except (ValueError, TypeError):
+                    _LOGGER.debug(
+                        "Could not restore state from previous session, starting fresh"
+                    )
+                    self._daily_kwh = 0.0
+            else:
                 _LOGGER.debug(
-                    "Restored daily kWh from previous session: %.3f kWh",
+                    "Skipping state restore — backfill already populated daily kWh: %.3f kWh",
                     self._daily_kwh,
                 )
-            except (ValueError, TypeError):
-                _LOGGER.debug(
-                    "Could not restore state from previous session, starting fresh"
-                )
-                self._daily_kwh = 0.0
 
         # Set current date
         self._current_date = datetime.now().replace(
@@ -186,7 +194,7 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         current_date = start_date
         consecutive_empty_days = 0
         found_any_data = False
-        self._cumulative_stat_sum = 0.0  # Reset cumulative sum at start of each backfill
+        self._cumulative_stat_sum = 0.0  # Reset at the start of each full backfill
 
         while current_date <= end_date:
             _LOGGER.debug("Backfilling daily total for %s", current_date.strftime("%Y-%m-%d"))
@@ -273,69 +281,80 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
         )
 
     async def _async_process_daily_total(self, response: list, date: datetime) -> None:
-        """Calculate and store daily total from hourly data.
-        
-        Creates both:
-        - Sensor state update (only for current day)
-        - Statistics entry (for all days, used by Energy dashboard)
-        
+        """Calculate and store hourly statistics from daily API data.
+
+        Creates:
+        - Sensor state update (daily total for display)
+        - One StatisticData entry per hour, with a monotonically increasing cumulative
+          sum across all days (never resets). HA's Energy dashboard computes per-hour
+          and per-day consumption as the delta between consecutive entries, which works
+          correctly for any time span — the same approach used by physical pulse-counter
+          integrations.
+
         Args:
-            response: List of hourly data points
-            date: The date for which we're calculating the daily total
+            response: List of hourly data points from the API
+            date: The date for which we're calculating
         """
         if not response:
             return
 
         daily_total = 0.0
-        hourly_count = 0
+        statistics_data = []
 
-        for point in response:
+        for point in sorted(response, key=lambda p: int(p.get("hour", 0))):
             if not point.get("value"):
                 continue
 
             # Only count paid energy (free energy has offpeakValue != "0.00")
-            if point.get("offpeakValue", "0.00") == "0.00":
-                kwh_value = float(point["value"])
-                daily_total += kwh_value
-                hourly_count += 1
+            if point.get("offpeakValue", "0.00") != "0.00":
+                continue
 
-        if hourly_count > 0:
+            kwh_value = float(point["value"])
+            self._cumulative_stat_sum += kwh_value
+            daily_total += kwh_value
+
+            # Parse actual hourly timestamp from the API response
+            try:
+                timestamp_str = point["date"]
+                if "+" in timestamp_str:
+                    base, tz = timestamp_str.rsplit("+", 1)
+                    timestamp_str = base + "+" + tz.replace(":", "")
+                elif timestamp_str.count("-") > 2:
+                    base = timestamp_str.rsplit("-", 1)[0]
+                    tz = timestamp_str.rsplit("-", 1)[1]
+                    timestamp_str = base + "-" + tz.replace(":", "")
+                hour_timestamp = datetime.fromisoformat(timestamp_str)
+            except (ValueError, KeyError):
+                _LOGGER.warning(
+                    "Could not parse timestamp for hour %s on %s",
+                    point.get("hour"), date.strftime("%Y-%m-%d"),
+                )
+                hour = int(point.get("hour", 0))
+                hour_timestamp = dt_util.now().replace(
+                    year=date.year, month=date.month, day=date.day,
+                    hour=hour, minute=0, second=0, microsecond=0,
+                )
+
+            statistics_data.append(
+                StatisticData(
+                    start=hour_timestamp,
+                    sum=self._cumulative_stat_sum,
+                )
+            )
+
+        if daily_total > 0:
             _LOGGER.debug(
                 "Daily total for %s: %.3f kWh (%d hours)",
                 date.strftime("%Y-%m-%d"),
                 daily_total,
-                hourly_count,
+                len(statistics_data),
             )
-            
-            # Always update state with the most recent day's data
-            # Due to 3-day API lag, "today" never has data, so use most recent processed day
+
             self._daily_kwh = daily_total
             self._most_recent_date = date
-            
-            # Create statistics entry for all days (both past and current)
-            # This allows the Energy dashboard to show historical daily totals
-            # with proper timestamps even though sensor state only shows today
+
             try:
                 icp = self._icp
-                # date is a naive local datetime (from datetime.now()).
-                # dt_util.as_local() treats naive datetimes as UTC, which would
-                # shift NZ timestamps by +12h. Use dt_util.now() to get the
-                # local tzinfo and attach it directly to midnight of the target date.
-                stat_start = dt_util.now().replace(
-                    year=date.year, month=date.month, day=date.day,
-                    hour=0, minute=0, second=0, microsecond=0
-                )
-                
-                self._cumulative_stat_sum += daily_total
-
-                statistics_data = [
-                    StatisticData(
-                        start=stat_start,
-                        sum=self._cumulative_stat_sum,
-                    )
-                ]
-                
-                # Use stable ID so all daily data points go into one statistics series
                 metadata = StatisticMetaData(
                     has_mean=False,
                     has_sum=True,
@@ -344,10 +363,10 @@ class ContactEnergyDailyEnergySensor(BaseSensor, RestoreEntity):
                     statistic_id=f"{DOMAIN}:daily_energy_consumption",
                     unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                 )
-                
                 async_add_external_statistics(self.hass, metadata, statistics_data)
                 _LOGGER.debug(
-                    "Created statistics entry for daily energy on %s: %.3f kWh",
+                    "Created %d hourly statistics entries for %s: %.3f kWh",
+                    len(statistics_data),
                     date.strftime("%Y-%m-%d"),
                     daily_total,
                 )
